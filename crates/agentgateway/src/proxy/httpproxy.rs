@@ -1787,15 +1787,23 @@ pub fn build_service_call(
 			"using hostname-based target for double hbone"
 		);
 		Target::Hostname(svc.hostname.clone(), port)
-	} else {
-		// TODO: support a mode like ServiceEntry DYNAMIC_DNS. Need a way to signal this, though; perhaps:
-		// wl.workload_ips.is_empty() && wl.hostname.starts_with("*.")
-		// For direct connections, we need the workload IP
-		let Some(ip) = wl.workload_ips.first() else {
-			return Err(ProxyError::NoHealthyEndpoints);
-		};
+	} else if let Some(ip) = wl.workload_ips.first() {
+		// Direct connection using workload IP with remapped target port
 		let dest = SocketAddr::from((*ip, target_port));
 		Target::Address(dest)
+	} else if !wl.hostname.is_empty() {
+		// DNS-resolved external service (e.g., MESH_EXTERNAL ServiceEntry with
+		// resolution: DNS). The workload has no IPs but has a hostname.
+		// Use hostname with the remapped target port so that tunnel CONNECT
+		// goes to the correct port (e.g., 443 instead of 80 for TLS origination).
+		tracing::debug!(
+			hostname = %wl.hostname,
+			target_port = %target_port,
+			"using hostname-based target for DNS-resolved external service"
+		);
+		Target::Hostname(wl.hostname.clone(), target_port)
+	} else {
+		return Err(ProxyError::NoHealthyEndpoints);
 	};
 
 	Ok(BackendCall {
